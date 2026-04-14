@@ -1,0 +1,26 @@
+# ==============================================================================
+# Web Check Alert Discord - Git Ignore Configuration
+# ==============================================================================
+
+# --- Terraform 実行時に生成される一時ディレクトリ ---
+.terraform/
+
+# --- Terraform 状態管理ファイル (機密情報を含むため Git 管理外) ---
+*.tfstate
+*.tfstate.*
+
+# --- 機密情報を含む設定ファイル (個人の Discord Webhook 等) ---
+terraform.tfvars
+terraform.tfvars.json
+.env
+
+# --- terraform plan の出力ファイル ---
+*.tfplan
+
+# --- Lambda デプロイ用にアーカイブされた ZIP ファイル ---
+# (Terraform によって自動生成されるため、Git 管理には不要)
+*.zip
+
+# --- その他、システム一時ファイル ---
+.DS_Store
+.terraform.lock.hcl
