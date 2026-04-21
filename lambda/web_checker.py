@@ -49,14 +49,25 @@ def lambda_handler(event, context):
     except Exception as e:
         print(f"Error reading state from S3: {e}")
 
+    # 呼び出し元情報の取得（デバッグ用）
+    source = event.get('source', 'unknown-trigger')
+    trigger_file = event.get('trigger_file', 'n/a')
+    
+    # 日本語のソース名に変換
+    source_display = {
+        "s3-event-immediate": "S3デプロイ直後の即時確認",
+        "dynamic-scheduler": "定期ポーリング監視",
+        "unknown-trigger": "直接実行または不明なトリガー"
+    }.get(source, source)
+
     # ハッシュ値の比較を行い、不一致（更新）がある場合にSNS通知を実行
     if previous_hash and current_hash != previous_hash:
         print(f"Change detected for URL: {web_url}")
         
-        # 通知メッセージを構造化 (1行目: サイト名更新告知, 2行目: URL, 3行目: 時刻)
-        # URLを独立させることで、後続テキストとの自動リンク混同を防止
         message = (
-            f"{site_name} が更新されました。\n"
+            f"【発火要因】{source_display}\n"
+            f"トリガーファイル: {trigger_file}\n"
+            f"対象サイト: {site_name}\n"
             f"URL: {web_url}\n"
             f"検知時刻: {timestamp}"
         )

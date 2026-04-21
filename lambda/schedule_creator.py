@@ -31,13 +31,26 @@ def lambda_handler(event, context):
     now = datetime.datetime.now(jst)
     timestamp = now.strftime('%Y/%m/%d %H:%M:%S')
 
+    # S3イベントから詳細情報を抽出
+    record = event['Records'][0] if 'Records' in event and len(event['Records']) > 0 else {}
+    object_key = record.get('s3', {}).get('object', {}).get('key', 'unknown')
+    event_name = record.get('eventName', 'unknown')
+    bucket_name = record.get('s3', {}).get('bucket', {}).get('name', 'unknown')
+
+    # 【重複対策1】完全一致のチェック
+    # prefixフィルターをすり抜けた一時ファイル（index.html.tmp等）をここで完全に排除します
+    if object_key != 'index.html':
+        print(f"Skipping trigger for non-target file: {object_key}")
+        return {"statusCode": 200, "body": "Skipped"}
+
     # S3バケットの更新をSNSに通知し、デプロイ完了を報告
     try:
-        # メッセージの構造化 (1行目: サイト名更新告知, 2行目: URL, 3行目: 時刻)
         deploy_message = (
-            f"{site_name} のソースが更新されました。\n"
+            f"【発火要因】S3デプロイ検知 ({event_name})\n"
+            f"トリガーファイル: {object_key}\n"
+            f"対象サイト: {site_name}\n"
             f"URL: {web_url}\n"
-            f"更新時刻: {timestamp}"
+            f"検知時刻: {timestamp}"
         )
         sns.publish(
             TopicArn=sns_topic_arn,
@@ -52,32 +65,36 @@ def lambda_handler(event, context):
         lambda_client.invoke(
             FunctionName=target_lambda_arn,
             InvocationType='Event',
-            Payload=json.dumps({"source": "s3-event-immediate", "triggered_at": timestamp})
+            Payload=json.dumps({
+                "source": "s3-event-immediate", 
+                "trigger_file": object_key,
+                "triggered_at": timestamp
+            })
         )
     except Exception as e:
         print(f"Immediate check invocation error: {e}")
 
     # デプロイ後の波及的な変更を監視するため、EventBridge Schedulerで1時間限定のスケジュールを作成
-    bucket_name = event['Records'][0]['s3']['bucket']['name'] if 'Records' in event and len(event['Records']) > 0 else "unknown"
-    
     # 即時実行との重複を避けるため、10分後からポーリングを開始
     ten_minutes_later = now + datetime.timedelta(minutes=10)
     one_hour_later = now + datetime.timedelta(hours=1)
     
-    # 衝突を回避するため、ユニークなスケジュール名を生成
-    unique_schedule_name = f"{schedule_name_prefix}{int(datetime.datetime.now().timestamp() * 1000)}"
+    # 【重複対策2】スケジュール名の固定化
+    # タイムスタンプを削除し、固定名にすることで、複数回呼ばれても既存のスケジュールを「更新」するだけに留めます
+    unique_schedule_name = f"{schedule_name_prefix}Main"
 
     schedule_params = {
         'Name': unique_schedule_name,
         'ScheduleExpression': 'rate(10 minutes)',
         'StartDate': ten_minutes_later,
         'EndDate': one_hour_later,
-        'ActionAfterCompletion': 'DELETE', # 終了後にリソースを自動削除
+        'ActionAfterCompletion': 'DELETE',
         'Target': {
             'Arn': target_lambda_arn,
             'RoleArn': scheduler_role_arn,
             'Input': json.dumps({
                 "source": "dynamic-scheduler",
+                "trigger_file": object_key,
                 "triggered_by_s3": bucket_name,
                 "triggered_at": timestamp
             })
@@ -86,6 +103,12 @@ def lambda_handler(event, context):
     }
 
     try:
+        # 既存のスケジュールがある場合は一度削除（または上書き）して、常に最新の1つだけに維持します
+        try:
+            scheduler.delete_schedule(Name=unique_schedule_name)
+        except scheduler.exceptions.ResourceNotFoundException:
+            pass
+
         scheduler.create_schedule(**schedule_params)
         print(f"Schedule created successfully: {unique_schedule_name}")
         return {
@@ -94,4 +117,4 @@ def lambda_handler(event, context):
         }
     except Exception as e:
         print(f"Schedule creation error: {e}")
-        raise e
+        return {"statusCode": 500, "body": str(e)}
