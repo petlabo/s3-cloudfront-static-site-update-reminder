@@ -24,3 +24,6 @@ terraform.tfvars.json
 # --- その他、システム一時ファイル ---
 .DS_Store
 .terraform.lock.hcl
+
+# デバッグ用ファイル
+debug/
